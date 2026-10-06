@@ -15,6 +15,24 @@ param(
 
     [string]$bg = "White",
 
+    [ValidateSet(
+        "Wireframe",
+        "HiddenEdges",
+        "ShadedWithHiddenEdges",
+        "Shaded",
+        "Realistic",
+        "ShadedWithEdges",
+        "WireframeNoHiddenEdges",
+        "WireframeWithHiddenEdges",
+        "Monochrome",
+        "Watercolor",
+        "Illustration",
+        "TechnicalIllustration"
+    )]
+    [string]$viewstyle = "ShadedWithEdges",
+
+    [string]$lightingstyle = "",
+
     [switch]$Recurse,
 
     [switch]$UseRunningInventor
@@ -259,6 +277,30 @@ function Get-ImageFormatInfo {
     }
 }
 
+function Get-InventorDisplayModeValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ViewStyle
+    )
+
+    $displayModes = @{
+        Wireframe = 8706
+        HiddenEdges = 8707
+        ShadedWithHiddenEdges = 8707
+        Shaded = 8708
+        Realistic = 8709
+        ShadedWithEdges = 8710
+        WireframeNoHiddenEdges = 8711
+        WireframeWithHiddenEdges = 8712
+        Monochrome = 8713
+        Watercolor = 8714
+        Illustration = 8715
+        TechnicalIllustration = 8716
+    }
+
+    return [int]$displayModes[$ViewStyle]
+}
+
 function Resolve-OutputBackground {
     param(
         [Parameter(Mandatory = $true)]
@@ -270,7 +312,7 @@ function Resolve-OutputBackground {
 
     if ($Background.Trim().ToLowerInvariant() -eq "transparent") {
         if (-not $ImageFormatInfo.SupportsTransparency) {
-            throw "Transparent background is only supported when -OutputFileType png is used."
+            throw "Transparent background is only supported when -outext png is used."
         }
 
         return @{
@@ -456,6 +498,11 @@ function Save-IsometricSnapshots {
         [Parameter(Mandatory = $true)]
         [string]$BackgroundDescription,
 
+        [Parameter(Mandatory = $true)]
+        [string]$ViewStyle,
+
+        [string]$LightingStyle,
+
         [scriptblock]$ProgressCallback
     )
 
@@ -464,11 +511,34 @@ function Save-IsometricSnapshots {
     try {
         $view = $Inventor.ActiveView
 
+        if (-not [string]::IsNullOrWhiteSpace($LightingStyle)) {
+            $captureStep = "finding lighting style '$LightingStyle'"
+            $lightingStyles = $Document.LightingStyles
+            $availableLightingStyles = New-Object 'System.Collections.Generic.List[string]'
+            $selectedLightingStyle = $null
+
+            for ($styleIndex = 1; $styleIndex -le $lightingStyles.Count; $styleIndex++) {
+                $candidateStyle = $lightingStyles.Item($styleIndex)
+                $null = $availableLightingStyles.Add([string]$candidateStyle.Name)
+                if ($candidateStyle.Name -ieq $LightingStyle) {
+                    $selectedLightingStyle = $candidateStyle
+                }
+            }
+
+            if ($null -eq $selectedLightingStyle) {
+                $availableNames = if ($availableLightingStyles.Count -gt 0) { $availableLightingStyles -join ", " } else { "none" }
+                throw "Lighting style '$LightingStyle' is not available for '$($Document.FullFileName)'. Available styles: $availableNames."
+            }
+
+            $captureStep = "applying lighting style '$LightingStyle'"
+            $Document.ActiveLightingStyle = $selectedLightingStyle
+        }
+
         $captureStep = "hiding work features and sketches"
         Hide-DocumentHelpers -Document $Document
 
-        $captureStep = "setting display mode"
-        $view.DisplayMode = 8710 # kShadedWithEdgesRendering
+        $captureStep = "setting view style to $ViewStyle"
+        $view.DisplayMode = Get-InventorDisplayModeValue -ViewStyle $ViewStyle
 
         $captureStep = "updating view"
         $view.Update()
@@ -731,6 +801,8 @@ try {
                 -ImageFormatInfo $imageFormatInfo `
                 -BackgroundStyle $backgroundStyle `
                 -BackgroundDescription $bg `
+                -ViewStyle $viewstyle `
+                -LightingStyle $lightingstyle `
                 -ProgressCallback $progressCallback
         }
         catch {
