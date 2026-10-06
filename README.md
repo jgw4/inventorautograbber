@@ -18,27 +18,32 @@ By default, InventorAutoGrabber will export 4 iso pictures (top right, bottom ri
 
 ### Required Flags
 
-`-src` - Specify the source path of your ipt/iam files
+`-src` - Specify the source path of your .ipt/.iam files. A path may be entered without specifying this flag
 
 ### Optional Flags
+
+`-out` - sets the output image folder. When this option is not specified, images will be placed in `\output\` in the same path as the script
+
 `-Recurse` - scans the directory recursively (looks through all sub-folders)
-`-out` - sets the output image folder. When this option is not specified, images will be placed in `/output/` in the same path as the script
 
 `-outwidth` - sets the output image width in pixels (default 2400)
-`-outheight` - sets the output image height in pixels (default 2400)
-`-outext` - set the default file type (default png) Available types:
 
-    `png`
-    `jpg`
-    `bmp`
-    `gif`
-    `tif`
+`-outheight` - sets the output image height in pixels (default 2400)
+
+`-outext` - set the default file type (default png) Available options:
+
+- png
+- jpg
+- bmp
+- gif
+- tif
+
 `-bg` - sets the output background (default `White`)
     - Named color, such as `White`, `Black`, or `LightGray`
     - Hex color, such as `#F5F5F5`
-    - `transparent` when `-outext png` is used
+    - `transparent` when `-outext png` or no -outext is used
 
-The script displays nested progress bars while processing: the current file's stage and view-capture progress, plus overall job percentage and a job ETA. The ETA is based on the average duration of fully completed files, so it appears after the first file finishes and updates between files.
+The script will also display a progress bar as the script runs, with ETA for batch completion.
 
 After each run, a timestamped `iag-run-*.log` report is written to the output folder. It lists files that failed during processing or cleanup and files skipped because they are not `.ipt` or `.iam`. A report is also written when the scan finds no supported files.
 
@@ -55,7 +60,7 @@ Currently, this script only support Autodesk Inventor 2026. The year is hardcode
 ```powershell
 .\iag.ps1 "C:\inventor\files\path"
 ```
-The most basic use of the script. This searches for all .ipt/iam files within the `\path\` top-level directory, and creates a set of 4 isometric PNG output pictures in the folder `/output/`, 2400x2400px square, with a White background in a "Shaded with Edges" style.
+The most basic use of the script. This searches for all .ipt/iam files within the `\path\` top-level directory, and creates a set of 4 isometric PNG output pictures in the folder `\output\`, 2400x2400px square, with a White background in a "Shaded with Edges" style. This does not look in subfolders. See the `-Recurse` examples below.
 
 ```powershell
 .\iag.ps1 -src "C:\inventor\files\path" -out "C:\output\images\path" -Recurse -outext jpg -outwidth 1920 -outheight 1080
