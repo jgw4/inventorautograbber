@@ -16,11 +16,12 @@ By default, InventorAutoGrabber will export 4 iso pictures (top right, bottom ri
 - PNG format
 - White background
 - View Style: Shaded with Edges
+- Lighting Style: As Document
 - All work features off
 
 ### Required Flags
 
-`-src` - Specify the source path of your .ipt/.iam files. This flag will be assumed when a path is given first, so `-src` it does not have to be explicitly typed in that case. 
+`-src` - Specify the source path of your .ipt/.iam files. This flag will be assumed when a path is given first, so `-src` it does not have to be explicitly typed in that case (see examples below).
 
 ### Optional Flags
 
@@ -40,10 +41,11 @@ By default, InventorAutoGrabber will export 4 iso pictures (top right, bottom ri
 - `gif`
 - `tif`
 
-`-bg` - sets the output background (default `White`)
-    - Named color, such as `White`, `Black`, or `LightGray`
-    - Hex color, such as `#F5F5F5`
-    - `transparent` when `-outext png` or no -outext is used
+`-bg` - sets the output background (default `White`) accepts:
+
+- Named color, such as `White`, `Black`, or `LightGray`
+- Hex color, such as `#F5F5F5`
+- `transparent` when `-outext png` or no -outext is used
 
 `-viewstyle` - sets the Inventor visual display style (default `ShadedWithEdges`). Available options:
 
@@ -81,6 +83,7 @@ Stock Inventor 2026 English lighting styles include:
 
 The requested style must be present in the part or assembly document. Custom Design Data or document styles can change the available names; an invalid name is reported with the document's available styles.
 
+## Other Features
 The script will also display a progress bar as the script runs, with ETA for batch completion.
 
 After each run, a timestamped `iag-run-*.log` report is written to the output folder. It lists files that failed during processing or cleanup and files skipped because they are not `.ipt` or `.iam`. A report is also written when the scan finds no supported files.
