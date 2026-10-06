@@ -1,20 +1,19 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$SourceDirectory,
+    [string]$src,
 
-    [Parameter(Mandatory = $true)]
-    [string]$OutputDirectory,
-
-    [ValidateRange(1, 20000)]
-    [int]$OutputWidth = 2400,
+    [string]$out,
 
     [ValidateRange(1, 20000)]
-    [int]$OutputHeight = 2400,
+    [int]$outwidth = 2400,
+
+    [ValidateRange(1, 20000)]
+    [int]$outheight = 2400,
 
     [ValidateSet("png", "jpg", "bmp", "gif", "tif")]
-    [string]$OutputFileType = "png",
+    [string]$outext = "png",
 
-    [string]$Background = "White",
+    [string]$bg = "White",
 
     [switch]$Recurse,
 
@@ -33,13 +32,19 @@ function Get-InventorApplication {
 
     if ($UseRunningInventor) {
         try {
-            return [Runtime.InteropServices.Marshal]::GetActiveObject("Inventor.Application")
+            return [pscustomobject]@{
+                Application = [Runtime.InteropServices.Marshal]::GetActiveObject("Inventor.Application")
+                Created = $false
+            }
         }
         catch {
         }
     }
 
-    return New-Object -ComObject Inventor.Application
+    return [pscustomobject]@{
+        Application = New-Object -ComObject Inventor.Application
+        Created = $true
+    }
 }
 
 function Get-VaultPreferencesPath {
@@ -296,6 +301,135 @@ function Resolve-OutputBackground {
     }
 }
 
+function Write-InventorProgress {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int]$FileNumber,
+
+        [Parameter(Mandatory = $true)]
+        [int]$TotalFiles,
+
+        [Parameter(Mandatory = $true)]
+        [int]$CompletedFiles,
+
+        [Parameter(Mandatory = $true)]
+        [int]$FilePercent,
+
+        [Parameter(Mandatory = $true)]
+        [string]$FileName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Stage,
+
+        [Parameter(Mandatory = $true)]
+        [Diagnostics.Stopwatch]$Elapsed
+    )
+
+    $effectiveCompletedFiles = [Math]::Min($TotalFiles, $CompletedFiles + ($FilePercent / 100.0))
+    $jobPercent = [int][Math]::Floor(($effectiveCompletedFiles / $TotalFiles) * 100)
+    $etaCompletedFiles = [Math]::Min($TotalFiles, $CompletedFiles + [int]($FilePercent -ge 100))
+    $etaSeconds = $null
+    $etaText = "calculating"
+
+    if ($etaCompletedFiles -ge $TotalFiles) {
+        $etaSeconds = 0
+        $etaText = "00:00:00"
+    }
+    elseif ($etaCompletedFiles -gt 0 -and $Elapsed.Elapsed.TotalSeconds -gt 0) {
+        $averageSecondsPerFile = $Elapsed.Elapsed.TotalSeconds / $etaCompletedFiles
+        $etaSeconds = [int][Math]::Ceiling($averageSecondsPerFile * ($TotalFiles - $etaCompletedFiles))
+        $etaHours = [int][Math]::Floor($etaSeconds / 3600)
+        $etaMinutes = [int][Math]::Floor(($etaSeconds % 3600) / 60)
+        $etaRemainderSeconds = $etaSeconds % 60
+        $etaText = "{0:00}:{1:00}:{2:00}" -f $etaHours, $etaMinutes, $etaRemainderSeconds
+    }
+
+    $jobProgress = @{
+        Id = 1
+        Activity = "InventorAutoGrabber job"
+        Status = "File {0} of {1}: {2} | Job ETA: {3}" -f $FileNumber, $TotalFiles, $FileName, $etaText
+        PercentComplete = $jobPercent
+    }
+
+    if ($null -ne $etaSeconds) {
+        $jobProgress.SecondsRemaining = $etaSeconds
+    }
+
+    Write-Progress @jobProgress
+    Write-Progress `
+        -Id 2 `
+        -ParentId 1 `
+        -Activity ("File {0} of {1}: {2}" -f $FileNumber, $TotalFiles, $FileName) `
+        -Status $Stage `
+        -PercentComplete $FilePercent
+}
+
+function Write-RunLog {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OutputDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SourceDirectory,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]$StartedAt,
+
+        [Parameter(Mandatory = $true)]
+        [int]$DiscoveredFiles,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$FailedFiles,
+
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [object[]]$SkippedFiles
+    )
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+    $logPath = Join-Path $OutputDirectory ("iag-run-{0}.log" -f $timestamp)
+    $suffix = 1
+    while (Test-Path -LiteralPath $logPath) {
+        $logPath = Join-Path $OutputDirectory ("iag-run-{0}-{1}.log" -f $timestamp, $suffix)
+        $suffix++
+    }
+
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $null = $lines.Add("InventorAutoGrabber run report")
+    $null = $lines.Add(("Started: {0:yyyy-MM-dd HH:mm:ss}" -f $StartedAt))
+    $null = $lines.Add(("Finished: {0:yyyy-MM-dd HH:mm:ss}" -f (Get-Date)))
+    $null = $lines.Add(("Source: {0}" -f $SourceDirectory))
+    $null = $lines.Add(("Files discovered: {0}" -f $DiscoveredFiles))
+    $null = $lines.Add(("Failed files: {0}" -f $FailedFiles.Count))
+    $null = $lines.Add(("Skipped files: {0}" -f $SkippedFiles.Count))
+    $null = $lines.Add("")
+    $null = $lines.Add("FAILED FILES")
+
+    if ($FailedFiles.Count -eq 0) {
+        $null = $lines.Add("(none)")
+    }
+    else {
+        foreach ($entry in $FailedFiles) {
+            $null = $lines.Add(("{0} -- {1}" -f $entry.Path, $entry.Reason))
+        }
+    }
+
+    $null = $lines.Add("")
+    $null = $lines.Add("SKIPPED FILES")
+    if ($SkippedFiles.Count -eq 0) {
+        $null = $lines.Add("(none)")
+    }
+    else {
+        foreach ($entry in $SkippedFiles) {
+            $null = $lines.Add(("{0} -- {1}" -f $entry.Path, $entry.Reason))
+        }
+    }
+
+    [IO.File]::WriteAllLines($logPath, $lines.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+    return $logPath
+}
+
 function Save-IsometricSnapshots {
     param(
         [Parameter(Mandatory = $true)]
@@ -320,7 +454,9 @@ function Save-IsometricSnapshots {
         [hashtable]$BackgroundStyle,
 
         [Parameter(Mandatory = $true)]
-        [string]$BackgroundDescription
+        [string]$BackgroundDescription,
+
+        [scriptblock]$ProgressCallback
     )
 
     $captureStep = "getting active view"
@@ -371,6 +507,11 @@ function Save-IsometricSnapshots {
             Remove-Item -LiteralPath $warmupPath -Force
         }
 
+        if ($null -ne $ProgressCallback) {
+            & $ProgressCallback 20 "Preparing views"
+        }
+
+        $orientationIndex = 0
         foreach ($orientation in $orientations) {
             $captureStep = "getting camera for $($orientation.Label)"
             $camera = $view.Camera
@@ -451,6 +592,12 @@ function Save-IsometricSnapshots {
                     Remove-Item -LiteralPath $tempCapturePath -Force
                 }
             }
+
+            $orientationIndex++
+            if ($null -ne $ProgressCallback) {
+                $filePercent = 20 + [int][Math]::Round(($orientationIndex / $orientations.Count) * 70)
+                & $ProgressCallback $filePercent ("Saved {0} of {1} views" -f $orientationIndex, $orientations.Count)
+            }
         }
     }
     catch {
@@ -458,10 +605,14 @@ function Save-IsometricSnapshots {
     }
 }
 
-$resolvedSource = (Resolve-Path -LiteralPath $SourceDirectory).Path
-$resolvedOutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$imageFormatInfo = Get-ImageFormatInfo -FileType $OutputFileType
-$backgroundStyle = Resolve-OutputBackground -Background $Background -ImageFormatInfo $imageFormatInfo
+if ([string]::IsNullOrWhiteSpace($out)) {
+    $out = Join-Path -Path $PSScriptRoot -ChildPath "output"
+}
+
+$resolvedSource = (Resolve-Path -LiteralPath $src).Path
+$resolvedOutputDirectory = [IO.Path]::GetFullPath($out)
+$imageFormatInfo = Get-ImageFormatInfo -FileType $outext
+$backgroundStyle = Resolve-OutputBackground -Background $bg -ImageFormatInfo $imageFormatInfo
 
 if (-not (Test-Path -LiteralPath $resolvedOutputDirectory)) {
     New-Item -ItemType Directory -Path $resolvedOutputDirectory | Out-Null
@@ -476,12 +627,32 @@ if ($Recurse) {
     $searchOptions.Recurse = $true
 }
 
-$files = Get-ChildItem @searchOptions |
+$runStartedAt = Get-Date
+$failedFiles = New-Object 'System.Collections.Generic.List[object]'
+$skippedFiles = New-Object 'System.Collections.Generic.List[object]'
+$sourceFiles = @(Get-ChildItem @searchOptions | Sort-Object FullName)
+$files = @($sourceFiles |
     Where-Object { $_.Extension -in ".ipt", ".iam" } |
-    Sort-Object FullName
+    Sort-Object FullName)
+
+foreach ($sourceFile in $sourceFiles) {
+    if ($sourceFile.Extension -notin ".ipt", ".iam") {
+        $skippedFiles.Add([pscustomobject]@{
+            Path = $sourceFile.FullName
+            Reason = "Unsupported file extension '$($sourceFile.Extension)'."
+        })
+    }
+}
 
 if (-not $files) {
-    throw "No .ipt or .iam files were found in '$resolvedSource'."
+    $logPath = Write-RunLog `
+        -OutputDirectory $resolvedOutputDirectory `
+        -SourceDirectory $resolvedSource `
+        -StartedAt $runStartedAt `
+        -DiscoveredFiles $sourceFiles.Count `
+        -FailedFiles @() `
+        -SkippedFiles $skippedFiles.ToArray()
+    throw "No .ipt or .iam files were found in '$resolvedSource'. Run log: '$logPath'."
 }
 
 if (-not $UseRunningInventor -and (Test-InventorRunning)) {
@@ -492,41 +663,79 @@ if (-not $UseRunningInventor) {
     Set-VaultPromptDefaultsForBatch
 }
 
-$inventor = Get-InventorApplication -UseRunningInventor:$UseRunningInventor
-$inventor.Visible = $true
-Wait-InventorReady -Inventor $inventor
-
-$originalScreenUpdating = $inventor.ScreenUpdating
-$originalSilentOperation = $inventor.SilentOperation
+$inventorSession = Get-InventorApplication -UseRunningInventor:$UseRunningInventor
+$inventor = $inventorSession.Application
+$createdInventor = $inventorSession.Created
+$settingsCaptured = $false
+$files = @($files)
+$totalFiles = $files.Count
+$completedFiles = 0
+$jobStopwatch = New-Object System.Diagnostics.Stopwatch
+$runLogPath = $null
 
 try {
+    $inventor.Visible = $true
+    Wait-InventorReady -Inventor $inventor
+
+    $originalScreenUpdating = $inventor.ScreenUpdating
+    $originalSilentOperation = $inventor.SilentOperation
+    $settingsCaptured = $true
+
     $inventor.ScreenUpdating = $false
     $inventor.SilentOperation = $true
 
+    $jobStopwatch.Start()
+
     foreach ($file in $files) {
         $document = $null
+        $fileFailureReasons = New-Object 'System.Collections.Generic.List[string]'
+        $fileNumber = $completedFiles + 1
+        $progressWriter = ${function:Write-InventorProgress}
+        $progressCallback = {
+            param(
+                [int]$FilePercent,
+                [string]$Stage
+            )
+
+            & $progressWriter `
+                -FileNumber $fileNumber `
+                -TotalFiles $totalFiles `
+                -CompletedFiles $completedFiles `
+                -FilePercent $FilePercent `
+                -FileName $file.Name `
+                -Stage $Stage `
+                -Elapsed $jobStopwatch
+        }.GetNewClosure()
+
+        $fileFailed = $false
+        & $progressCallback 0 "Opening document"
 
         try {
             Write-Host ("Processing {0}" -f $file.FullName)
 
             $currentStep = "opening document"
             $document = $inventor.Documents.Open([string]$file.FullName)
+            & $progressCallback 10 "Document opened"
 
             $currentStep = "activating document"
             $document.Activate()
+            & $progressCallback 15 "Document activated"
 
             $currentStep = "capturing snapshots"
             Save-IsometricSnapshots `
                 -Inventor $inventor `
                 -Document $document `
                 -OutputDirectory $resolvedOutputDirectory `
-                -OutputWidth $OutputWidth `
-                -OutputHeight $OutputHeight `
+                -OutputWidth $outwidth `
+                -OutputHeight $outheight `
                 -ImageFormatInfo $imageFormatInfo `
                 -BackgroundStyle $backgroundStyle `
-                -BackgroundDescription $Background
+                -BackgroundDescription $bg `
+                -ProgressCallback $progressCallback
         }
         catch {
+            $fileFailed = $true
+            $fileFailureReasons.Add(("{0}: {1}" -f $currentStep, $_.Exception.Message))
             Write-Warning ("Failed to process '{0}' while {1}: {2}" -f $file.FullName, $currentStep, $_.Exception.Message)
         }
         finally {
@@ -535,15 +744,93 @@ try {
                     $document.Close($true)
                 }
                 catch {
+                    $fileFailed = $true
+                    $fileFailureReasons.Add(("closing document: {0}" -f $_.Exception.Message))
                     Write-Warning ("Failed to close '{0}': {1}" -f $file.FullName, $_.Exception.Message)
                 }
+                finally {
+                    try {
+                        $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($document)
+                    }
+                    catch {
+                        $fileFailed = $true
+                        $fileFailureReasons.Add(("releasing document reference: {0}" -f $_.Exception.Message))
+                        Write-Warning ("Failed to release the document reference for '{0}': {1}" -f $file.FullName, $_.Exception.Message)
+                    }
+
+                    $document = $null
+                }
             }
+
+            if ($fileFailed) {
+                $failedFiles.Add([pscustomobject]@{
+                    Path = $file.FullName
+                    Reason = $fileFailureReasons -join "; "
+                })
+            }
+
+            $completionStatus = if ($fileFailed) { "Finished with errors" } else { "Complete" }
+            & $progressCallback 100 $completionStatus
+            $completedFiles++
         }
     }
 }
+catch {
+    $abortReason = "Not processed because the job stopped: $($_.Exception.Message)"
+    for ($fileIndex = $completedFiles; $fileIndex -lt $totalFiles; $fileIndex++) {
+        $skippedFiles.Add([pscustomobject]@{
+            Path = $files[$fileIndex].FullName
+            Reason = $abortReason
+        })
+    }
+
+    throw
+}
 finally {
-    $inventor.ScreenUpdating = $originalScreenUpdating
-    $inventor.SilentOperation = $originalSilentOperation
+    $jobStopwatch.Stop()
+    Write-Progress -Id 2 -Completed
+    Write-Progress -Id 1 -Completed
+
+    if ($settingsCaptured) {
+        try {
+            $inventor.ScreenUpdating = $originalScreenUpdating
+            $inventor.SilentOperation = $originalSilentOperation
+        }
+        catch {
+            Write-Warning ("Failed to restore Inventor settings: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    if ($createdInventor) {
+        try {
+            $inventor.Quit()
+        }
+        catch {
+            Write-Warning ("Failed to close the Inventor session: {0}" -f $_.Exception.Message)
+        }
+        finally {
+            try {
+                $null = [Runtime.InteropServices.Marshal]::ReleaseComObject($inventor)
+            }
+            catch {
+                Write-Warning ("Failed to release the Inventor application reference: {0}" -f $_.Exception.Message)
+            }
+        }
+    }
+
+    try {
+        $runLogPath = Write-RunLog `
+            -OutputDirectory $resolvedOutputDirectory `
+            -SourceDirectory $resolvedSource `
+            -StartedAt $runStartedAt `
+            -DiscoveredFiles $sourceFiles.Count `
+            -FailedFiles $failedFiles.ToArray() `
+            -SkippedFiles $skippedFiles.ToArray()
+        Write-Host ("Run log written to: {0}" -f $runLogPath)
+    }
+    catch {
+        Write-Warning ("Failed to write the run log: {0}" -f $_.Exception.Message)
+    }
 }
 
 Write-Host ("Finished. {0} files were saved to: {1}" -f $imageFormatInfo.Extension.ToUpperInvariant(), $resolvedOutputDirectory)
