@@ -1,0 +1,2 @@
+- This software should be designed to run on Windows machines only.
+- The full description of this project lies in README.md. Reference that document for goals and constraints
